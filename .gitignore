@@ -1,0 +1,15 @@
+# Build output
+target/
+*.class
+
+# IDE
+.idea/
+*.iml
+
+# OS
+.DS_Store
+
+# Generated database artifacts
+.codegraph/
+.jar-graph/
+dependency-reduced-pom.xml
