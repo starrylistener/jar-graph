@@ -93,7 +93,12 @@ class InitCommand : Runnable {
     }
 
     private fun findMvn(): String? {
-        // 1. 从当前目录向上递归查找 mvnw（Maven Wrapper）
+        // 1. launcher.js 注入的环境变量（优先）
+        System.getenv("JARGRAPH_MVN")?.let { path ->
+            if (File(path).exists()) return path
+        }
+
+        // 2. 从当前目录向上递归查找 mvnw（Maven Wrapper）
         var dir = File(".").canonicalFile
         while (dir.parentFile != null) {
             val mvnw = File(dir, "mvnw")
@@ -103,15 +108,10 @@ class InitCommand : Runnable {
             dir = dir.parentFile
         }
 
-        // 2. 检查环境变量指定的 mvn 路径
-        System.getenv("JARGRAPH_MVN")?.let { path ->
-            if (File(path).exists()) return path
-        }
-
         // 3. 从 PATH 中查找 mvn / mvnw
         listOf("mvn", "mvnw").firstOrNull { isCommandInPath(it) }?.let { return it }
 
-        // 4. 探测常见安装路径（不包含个人硬编码路径）
+        // 4. 探测常见安装路径
         val commonPaths = listOfNotNull(
             System.getenv("M2_HOME")?.let { "$it/bin/mvn" },
             System.getenv("MAVEN_HOME")?.let { "$it/bin/mvn" },
