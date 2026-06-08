@@ -1,74 +1,93 @@
 package com.jargraph.cli
 
-import com.jargraph.config.*
+import com.jargraph.config.GraphConfig
 import picocli.CommandLine
 import java.io.File
 
 @CommandLine.Command(
     name = "init",
-    description = ["初始化知识图谱配置"]
+    description = ["初始化项目知识图谱配置，解析 pom.xml 及传递依赖"]
 )
 class InitCommand : Runnable {
 
     @CommandLine.Option(
-        names = ["-g", "--global"],
-        description = ["全局模式：扫描整个 ~/.m2/repository"]
-    )
-    var global: Boolean = false
-
-    @CommandLine.Option(
         names = ["-f", "--force"],
-        description = ["强制跳过大小安全检查"]
+        description = ["强制重新初始化，覆盖已有配置"]
     )
     var force: Boolean = false
 
-    @CommandLine.Option(
-        names = ["--max-size"],
-        description = ["自定义安全阈值（GB），0 表示不限制"],
-        defaultValue = "5"
-    )
-    var maxSizeGb: Int = 5
-
-    @CommandLine.Option(
-        names = ["--path"],
-        description = ["自定义 JAR 目录路径"]
-    )
-    var customPath: String? = null
-
     override fun run() {
-        val scope = when {
-            customPath != null -> Scope.CUSTOM
-            global -> Scope.GLOBAL
-            else -> Scope.PROJECT
+        val pomFile = File("pom.xml")
+        if (!pomFile.exists()) {
+            println("[ERROR] 当前目录未找到 pom.xml，请在 Maven 项目根目录执行")
+            return
         }
 
-        val m2Repo = File(System.getProperty("user.home"), ".m2/repository")
-        val repoSizeGb = if (m2Repo.exists()) m2Repo.walkTopDown()
-            .filter { it.isFile }
-            .map { it.length() }
-            .sum() / (1024.0 * 1024.0 * 1024.0) else 0.0
+        val configFile = File(GraphConfig.CONFIG_PATH)
+        if (configFile.exists() && !force) {
+            println("[INFO] 配置已存在，使用 -f 强制重新初始化")
+            return
+        }
 
-        println("[INFO] 初始化模式: ${scope.name.lowercase()}")
+        println("[INFO] 解析项目: ${pomFile.canonicalPath}")
 
-        if (scope == Scope.GLOBAL && !force && maxSizeGb > 0) {
-            println("[INFO] 检测到 Maven 仓库: ${m2Repo.absolutePath}")
-            println("[INFO] 仓库大小: %.1f GB".format(repoSizeGb))
+        val mvnCmd = findMvn() ?: run {
+            println("[ERROR] 未找到 mvn 或 mvnw 命令，请确保 Maven 已安装")
+            return
+        }
 
-            if (repoSizeGb > maxSizeGb) {
-                println("[WARN] 仓库大小超过安全阈值 ($maxSizeGb GB)")
-                println("[HINT] 使用 -f 强制扫描，或调整 --max-size")
-                return
+        val tempFile = File.createTempFile("jar-graph-cp", ".txt")
+        val process = ProcessBuilder(
+            mvnCmd, "-q", "dependency:build-classpath",
+            "-Dmdep.outputFile=${tempFile.absolutePath}"
+        )
+            .directory(File("."))
+            .redirectError(ProcessBuilder.Redirect.INHERIT)
+            .start()
+
+        val exitCode = process.waitFor()
+        if (exitCode != 0) {
+            println("[ERROR] 执行 '$mvnCmd dependency:build-classpath' 失败（exit=$exitCode）")
+            println("[HINT] 请确保项目可编译：mvn compile -q")
+            tempFile.delete()
+            return
+        }
+
+        val classpath = tempFile.readText().trim()
+        tempFile.delete()
+
+        val jars = classpath.split(File.pathSeparator).filter { it.isNotBlank() }
+        println("[INFO] 解析到 ${jars.size} 个依赖 JAR（含传递依赖）")
+
+        if (jars.isNotEmpty()) {
+            jars.take(5).forEach { println("[INFO]   $it") }
+            if (jars.size > 5) {
+                println("[INFO]   ... 共 ${jars.size} 个")
             }
         }
 
         val config = GraphConfig(
-            scope = scope,
-            m2Repo = m2Repo.absolutePath,
-            maxSizeGb = maxSizeGb,
-            forceScan = force
+            projectPath = File(".").canonicalPath,
+            classpath = jars.joinToString(",")
         )
 
         GraphConfig.save(config)
-        println("[INFO] 配置已保存到: .jar-graph/config.properties")
+        println("[INFO] 配置已保存到: ${GraphConfig.CONFIG_PATH}")
+    }
+
+    private fun findMvn(): String? {
+        return listOf("mvn", "mvnw").firstOrNull { isCommandAvailable(it) }
+    }
+
+    private fun isCommandAvailable(cmd: String): Boolean {
+        return try {
+            ProcessBuilder(cmd, "-v")
+                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                .redirectError(ProcessBuilder.Redirect.DISCARD)
+                .start()
+                .waitFor() == 0
+        } catch (e: Exception) {
+            false
+        }
     }
 }

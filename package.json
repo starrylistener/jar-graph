@@ -1,0 +1,33 @@
+{
+  "name": "@jargraph/cli",
+  "version": "0.1.0",
+  "description": "JAR bytecode indexer with codegraph-compatible SQLite output",
+  "bin": {
+    "jargraph": "./bin/jargraph.js"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "target/jar-graph-0.1.0-SNAPSHOT.jar"
+  ],
+  "scripts": {
+    "build": "mvn package -DskipTests -q",
+    "prepublishOnly": "npm run build"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "keywords": [
+    "jar",
+    "bytecode",
+    "codegraph",
+    "java",
+    "knowledge-graph"
+  ],
+  "license": "MIT"
+}

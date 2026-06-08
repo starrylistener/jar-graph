@@ -23,10 +23,29 @@ class JarIndexer {
     private fun processJarFile(jarFile: File, namePrefix: String, excludeNames: Set<String>): IndexResult {
         val jar = JarFile(jarFile)
         val jarEntryPrefix = "jar:$namePrefix"
+        val jarFileName = namePrefix.substringAfterLast('/')
 
         val nodes = mutableListOf<GraphNode>()
         val edges = mutableListOf<GraphEdge>()
         val files = mutableListOf<JarFileRecord>()
+
+        // JAR file 节点（使 contains 边合法）
+        nodes.add(
+            GraphNode(
+                id = jarEntryPrefix,
+                kind = "file",
+                name = jarFileName,
+                qualifiedName = jarEntryPrefix,
+                filePath = jarEntryPrefix,
+                language = "java",
+                startLine = 0,
+                endLine = 0,
+                startColumn = 0,
+                endColumn = 0,
+                docstring = "[JAR] $jarFileName",
+                updatedAt = System.currentTimeMillis()
+            )
+        )
 
         files.add(
             JarFileRecord(
@@ -48,7 +67,7 @@ class JarIndexer {
             jar.getInputStream(entry).use { stream ->
                 val classReader = ClassReader(stream.readAllBytes())
                 val visitor = CodeGraphClassVisitor(
-                    jarFileName = namePrefix.substringAfterLast('/'),
+                    jarFileName = jarFileName,
                     jarEntryPrefix = jarEntryPrefix,
                     classFilePath = entry.name,
                     nodeCollector = nodes,
@@ -79,8 +98,8 @@ class JarIndexer {
 
         jar.close()
 
-        // 更新 nodeCount
-        val nodeCount = nodes.count { it.filePath.startsWith(jarEntryPrefix) }
+        // 更新 nodeCount（只统计本 JAR 层级直接包含的 class 节点）
+        val nodeCount = nodes.count { it.filePath.startsWith(jarEntryPrefix) && it.kind != "file" }
         files[0] = files[0].copy(nodeCount = nodeCount)
 
         return IndexResult(nodes = nodes, edges = edges, files = files)
@@ -95,6 +114,11 @@ class JarIndexer {
 
 /**
  * ASM ClassVisitor，提取 codegraph 兼容的节点和边
+ *
+ * ID 生成策略：只用 qualifiedName，不用 filePath。
+ * 这样跨 class / 跨 JAR 的引用边才能匹配到实际节点。
+ * 副作用：同一个 qualifiedName 出现在多个 JAR 中时后写入的会覆盖前者，
+ * 但对于结构导航来说可接受（file_path 仍保留来源信息）。
  */
 private class CodeGraphClassVisitor(
     private val jarFileName: String,
@@ -137,7 +161,7 @@ private class CodeGraphClassVisitor(
 
         val doc = buildDocString(classKind, classQualifiedName, classVisibility, jarFileName)
 
-        classId = makeId(classFileEntryPath, classQualifiedName)
+        classId = makeId(classQualifiedName)
 
         nodeCollector.add(
             GraphNode(
@@ -166,21 +190,19 @@ private class CodeGraphClassVisitor(
             GraphEdge(
                 source = jarEntryPrefix,
                 target = classId,
-                kind = "contains",
-                provenance = "asm"
+                kind = "contains"
             )
         )
 
         // extends
         if (superName != null && superName != "java/lang/Object") {
             val superQualified = superName.replace('/', '.')
-            val superId = makeId(classFileEntryPath, superQualified)
+            val superId = makeId(superQualified)
             edgeCollector.add(
                 GraphEdge(
                     source = classId,
                     target = superId,
-                    kind = "extends",
-                    provenance = "asm"
+                    kind = "extends"
                 )
             )
         }
@@ -188,13 +210,12 @@ private class CodeGraphClassVisitor(
         // implements
         interfaces?.forEach { iface ->
             val ifaceQualified = iface.replace('/', '.')
-            val ifaceId = makeId(classFileEntryPath, ifaceQualified)
+            val ifaceId = makeId(ifaceQualified)
             edgeCollector.add(
                 GraphEdge(
                     source = classId,
                     target = ifaceId,
-                    kind = "implements",
-                    provenance = "asm"
+                    kind = "implements"
                 )
             )
         }
@@ -210,7 +231,7 @@ private class CodeGraphClassVisitor(
         if (skipClass) return null
 
         val fieldQualified = "$classQualifiedName::$name"
-        val fieldId = makeId(classFileEntryPath, fieldQualified)
+        val fieldId = makeId(fieldQualified)
         val visibility = accessToVisibility(access)
         val typeName = Type.getType(descriptor).className
 
@@ -241,8 +262,7 @@ private class CodeGraphClassVisitor(
             GraphEdge(
                 source = classId,
                 target = fieldId,
-                kind = "contains",
-                provenance = "asm"
+                kind = "contains"
             )
         )
 
@@ -264,7 +284,7 @@ private class CodeGraphClassVisitor(
             else -> name
         }
         val methodQualified = "$classQualifiedName::$methodDisplayName$descriptor"
-        val methodId = makeId(classFileEntryPath, methodQualified)
+        val methodId = makeId(methodQualified)
 
         val returnType = Type.getReturnType(descriptor).className
         val paramTypes = Type.getArgumentTypes(descriptor).map { it.className }
@@ -299,23 +319,21 @@ private class CodeGraphClassVisitor(
             GraphEdge(
                 source = classId,
                 target = methodId,
-                kind = "contains",
-                provenance = "asm"
+                kind = "contains"
             )
         )
 
-        return MethodCallVisitor(methodId, classFileEntryPath, edgeCollector)
+        return MethodCallVisitor(methodId, edgeCollector)
     }
 
-    private fun makeId(filePath: String, qualifiedName: String): String {
-        return sha256("$filePath::$qualifiedName")
+    private fun makeId(qualifiedName: String): String {
+        return sha256(qualifiedName).take(32)
     }
 
     private fun sha256(input: String): String {
         return MessageDigest.getInstance("SHA-256")
             .digest(input.toByteArray())
             .joinToString("") { "%02x".format(it) }
-            .take(32)
     }
 
     private fun accessToVisibility(access: Int): String? = when {
@@ -342,7 +360,6 @@ private class CodeGraphClassVisitor(
  */
 private class MethodCallVisitor(
     private val methodId: String,
-    private val classFileEntryPath: String,
     private val edgeCollector: MutableList<GraphEdge>
 ) : MethodVisitor(Opcodes.ASM9) {
 
@@ -354,21 +371,20 @@ private class MethodCallVisitor(
         isInterface: Boolean
     ) {
         val targetQualified = "${owner.replace('/', '.')}::$name$descriptor"
-        val targetId = sha256("$classFileEntryPath::$targetQualified").take(32)
+        val targetId = sha256(targetQualified).take(32)
 
         edgeCollector.add(
             GraphEdge(
                 source = methodId,
                 target = targetId,
-                kind = "calls",
-                provenance = "asm"
+                kind = "calls"
             )
         )
     }
 
     override fun visitFieldInsn(opcode: Int, owner: String, name: String, descriptor: String) {
         val targetQualified = "${owner.replace('/', '.')}::$name"
-        val targetId = sha256("$classFileEntryPath::$targetQualified").take(32)
+        val targetId = sha256(targetQualified).take(32)
 
         val edgeKind = when (opcode) {
             Opcodes.GETFIELD, Opcodes.GETSTATIC -> "references"
@@ -380,8 +396,7 @@ private class MethodCallVisitor(
             GraphEdge(
                 source = methodId,
                 target = targetId,
-                kind = edgeKind,
-                provenance = "asm"
+                kind = edgeKind
             )
         )
     }
@@ -425,7 +440,7 @@ data class GraphEdge(
     val metadata: String? = null,
     val line: Int? = null,
     val col: Int? = null,
-    val provenance: String = "asm"
+    val provenance: String? = null
 )
 
 data class JarFileRecord(

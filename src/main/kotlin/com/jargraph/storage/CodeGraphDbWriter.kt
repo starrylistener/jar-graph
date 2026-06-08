@@ -120,6 +120,7 @@ class CodeGraphDbWriter(private val dbPath: String) {
         conn.createStatement().use { stmt ->
             stmt.execute("PRAGMA optimize")
         }
+        conn.autoCommit = false
     }
 
     /**
@@ -180,6 +181,17 @@ class CodeGraphDbWriter(private val dbPath: String) {
             for (sql in CODEGRAPH_SCHEMA) {
                 stmt.execute(sql)
             }
+            // 标记所有迁移已应用：schema.sql 已包含 version 4 的完整结构
+            val now = System.currentTimeMillis()
+            stmt.execute(
+                "INSERT OR IGNORE INTO schema_versions (version, applied_at, description) VALUES (2, $now, 'Add project metadata, provenance tracking, and unresolved ref context')"
+            )
+            stmt.execute(
+                "INSERT OR IGNORE INTO schema_versions (version, applied_at, description) VALUES (3, $now, 'Add lower(name) expression index for memory-efficient case-insensitive lookups')"
+            )
+            stmt.execute(
+                "INSERT OR IGNORE INTO schema_versions (version, applied_at, description) VALUES (4, $now, 'Drop redundant idx_edges_source / idx_edges_target (covered by source_kind / target_kind composites)')"
+            )
         }
     }
 

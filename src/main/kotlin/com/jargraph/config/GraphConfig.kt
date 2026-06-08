@@ -3,18 +3,12 @@ package com.jargraph.config
 import java.io.File
 import java.util.Properties
 
-/**
- * 知识图谱全局配置（简化版，properties 格式）
- */
 class GraphConfig(
-    var scope: Scope = Scope.PROJECT,
-    var projectRoot: String = ".",
-    var m2Repo: String = "~/.m2/repository",
-    var maxSizeGb: Int = 5,
-    var forceScan: Boolean = false
+    var projectPath: String = ".",
+    var classpath: String = ""
 ) {
     companion object {
-        private const val CONFIG_PATH = ".codegraph/config.properties"
+        const val CONFIG_PATH = ".jar-graph/config.properties"
 
         @JvmStatic
         fun load(): GraphConfig {
@@ -22,11 +16,8 @@ class GraphConfig(
             return if (file.exists()) {
                 val props = Properties().apply { load(file.reader()) }
                 GraphConfig(
-                    scope = Scope.valueOf(props.getProperty("scope", "PROJECT")),
-                    projectRoot = props.getProperty("project.root", "."),
-                    m2Repo = props.getProperty("global.m2Repo", "~/.m2/repository"),
-                    maxSizeGb = props.getProperty("global.maxSizeGb", "5").toInt(),
-                    forceScan = props.getProperty("global.forceScan", "false").toBoolean()
+                    projectPath = props.getProperty("project.path", "."),
+                    classpath = props.getProperty("project.classpath", "")
                 )
             } else {
                 GraphConfig()
@@ -38,17 +29,10 @@ class GraphConfig(
             val file = File(CONFIG_PATH)
             file.parentFile?.mkdirs()
             val props = Properties().apply {
-                setProperty("scope", config.scope.name)
-                setProperty("project.root", config.projectRoot)
-                setProperty("global.m2Repo", config.m2Repo)
-                setProperty("global.maxSizeGb", config.maxSizeGb.toString())
-                setProperty("global.forceScan", config.forceScan.toString())
+                setProperty("project.path", config.projectPath)
+                setProperty("project.classpath", config.classpath)
             }
             props.store(file.writer(), "JAR Graph Configuration")
         }
     }
-}
-
-enum class Scope {
-    PROJECT, GLOBAL, CUSTOM
 }
