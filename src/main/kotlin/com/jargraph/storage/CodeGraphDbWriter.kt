@@ -17,6 +17,9 @@ class CodeGraphDbWriter(private val dbPath: String) {
     fun open(): CodeGraphDbWriter {
         Class.forName("org.sqlite.JDBC")
         connection = DriverManager.getConnection("jdbc:sqlite:$dbPath")
+        // WAL 必须在 autoCommit=true / 事务外设置
+        connection?.createStatement()?.use { it.execute("PRAGMA journal_mode=WAL") }
+        connection?.createStatement()?.use { it.execute("PRAGMA synchronous=NORMAL") }
         connection?.autoCommit = false
         initSchema()
         return this
@@ -26,11 +29,26 @@ class CodeGraphDbWriter(private val dbPath: String) {
         connection?.close()
     }
 
+    /** 分批写入的批次大小 */
+    private val BATCH_SIZE = 50000
+
     /**
      * 写入完整的分析结果
+     * @param onProgress (current, total) -> Unit，total 为 nodes+edges 总数
      */
-    fun write(result: IndexResult) {
+    fun write(result: IndexResult, onProgress: ((current: Int, total: Int) -> Unit)? = null) {
         val conn = connection ?: throw IllegalStateException("Database not opened")
+
+        // 清理已有的 JAR 数据，防止重复 index 导致 edges 累积
+        conn.createStatement().use { stmt ->
+            stmt.execute("DELETE FROM edges WHERE source IN (SELECT id FROM nodes WHERE file_path LIKE 'jar:%')")
+            stmt.execute("DELETE FROM edges WHERE target IN (SELECT id FROM nodes WHERE file_path LIKE 'jar:%')")
+            stmt.execute("DELETE FROM nodes WHERE file_path LIKE 'jar:%'")
+            stmt.execute("DELETE FROM files WHERE path LIKE 'jar:%'")
+        }
+
+        val totalItems = result.nodes.size + result.edges.size
+        var written = 0
 
         // 1. 写入 files
         conn.prepareStatement(
@@ -66,6 +84,7 @@ class CodeGraphDbWriter(private val dbPath: String) {
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """.trimIndent()
         ).use { stmt ->
+            var batchCount = 0
             for (node in result.nodes) {
                 stmt.setString(1, node.id)
                 stmt.setString(2, node.kind)
@@ -88,8 +107,19 @@ class CodeGraphDbWriter(private val dbPath: String) {
                 stmt.setString(19, node.typeParameters)
                 stmt.setLong(20, node.updatedAt)
                 stmt.addBatch()
+                batchCount++
+                if (batchCount >= BATCH_SIZE) {
+                    stmt.executeBatch()
+                    written += batchCount
+                    onProgress?.invoke(written, totalItems)
+                    batchCount = 0
+                }
             }
-            stmt.executeBatch()
+            if (batchCount > 0) {
+                stmt.executeBatch()
+                written += batchCount
+                onProgress?.invoke(written, totalItems)
+            }
         }
 
         // 3. 写入 edges
@@ -100,6 +130,7 @@ class CodeGraphDbWriter(private val dbPath: String) {
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """.trimIndent()
         ).use { stmt ->
+            var batchCount = 0
             for (edge in result.edges) {
                 stmt.setString(1, edge.source)
                 stmt.setString(2, edge.target)
@@ -109,8 +140,19 @@ class CodeGraphDbWriter(private val dbPath: String) {
                 stmt.setObject(6, edge.col)
                 stmt.setString(7, edge.provenance)
                 stmt.addBatch()
+                batchCount++
+                if (batchCount >= BATCH_SIZE) {
+                    stmt.executeBatch()
+                    written += batchCount
+                    onProgress?.invoke(written, totalItems)
+                    batchCount = 0
+                }
             }
-            stmt.executeBatch()
+            if (batchCount > 0) {
+                stmt.executeBatch()
+                written += batchCount
+                onProgress?.invoke(written, totalItems)
+            }
         }
 
         conn.commit()

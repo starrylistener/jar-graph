@@ -41,13 +41,21 @@ class IndexCommand : Runnable {
     var excludeCovered: Boolean = false
 
     override fun run() {
-        val jarsToIndex = jarPaths.ifEmpty {
+        val (jarsToIndex, excludedJars) = if (jarPaths.isNotEmpty()) {
+            jarPaths to emptyList()
+        } else {
             val config = GraphConfig.load()
             if (config.classpath.isBlank()) {
-                println("[ERROR] 未指定 JAR 路径，且未找到 init 配置，请先运行: jar-graph init")
+                println("[ERROR] 未指定 JAR 路径，且未找到 init 配置，请先运行: jargraph init")
                 return
             }
-            config.classpath.split(",")
+            val allJars = config.classpath.split(",")
+            val excluded = config.excludedJars
+            val selected = allJars.filter { jar -> excluded.none { jar.endsWith(it) || jar == it } }
+            if (excluded.isNotEmpty()) {
+                println("[INFO] 根据 init 配置跳过 ${excluded.size} 个 JAR，实际索引 ${selected.size} 个")
+            }
+            selected to excluded
         }
 
         // 1. 打开数据库并加载 exclude 名单
@@ -137,7 +145,10 @@ class IndexCommand : Runnable {
         // 4. 写入数据库
         progress.start("Writing database")
         val mergedResult = IndexResult(nodes = allNodes, edges = distinctEdges, files = emptyList())
-        writer.write(mergedResult)
+        val totalWriteItems = allNodes.size + distinctEdges.size
+        writer.write(mergedResult) { current, _ ->
+            progress.update(current, totalWriteItems)
+        }
         val stats = writer.getStats()
         writer.close()
         progress.finish("Writing database", "${ProgressBar.formatNumber(stats.nodeCount.toInt())} nodes, ${ProgressBar.formatNumber(stats.edgeCount.toInt())} edges")
@@ -151,6 +162,9 @@ class IndexCommand : Runnable {
         println("  文件: ${stats.fileCount}")
         if (excludeCovered) {
             println("  模式: 已跳过源码覆盖的类")
+        }
+        if (excludedJars.isNotEmpty()) {
+            println("  模式: 已跳过 ${excludedJars.size} 个未选中的 JAR")
         }
         println()
         println("节点分布:")

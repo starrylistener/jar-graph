@@ -5,7 +5,8 @@ import java.util.Properties
 
 class GraphConfig(
     var projectPath: String = ".",
-    var classpath: String = ""
+    var classpath: String = "",
+    var excludedJars: List<String> = emptyList()
 ) {
     companion object {
         const val CONFIG_PATH = ".jar-graph/config.properties"
@@ -17,7 +18,11 @@ class GraphConfig(
                 val props = Properties().apply { load(file.reader()) }
                 GraphConfig(
                     projectPath = props.getProperty("project.path", "."),
-                    classpath = props.getProperty("project.classpath", "")
+                    classpath = props.getProperty("project.classpath", ""),
+                    excludedJars = props.getProperty("project.excluded.jars", "")
+                        .split(",")
+                        .map { it.trim() }
+                        .filter { it.isNotBlank() }
                 )
             } else {
                 GraphConfig()
@@ -31,6 +36,7 @@ class GraphConfig(
             val props = Properties().apply {
                 setProperty("project.path", config.projectPath)
                 setProperty("project.classpath", config.classpath)
+                setProperty("project.excluded.jars", config.excludedJars.joinToString(","))
             }
             props.store(file.writer(), "JAR Graph Configuration")
         }
