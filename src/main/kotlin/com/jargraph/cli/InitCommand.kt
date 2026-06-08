@@ -16,6 +16,12 @@ class InitCommand : Runnable {
     )
     var force: Boolean = false
 
+    @CommandLine.Option(
+        names = ["--skip-select"],
+        description = ["跳过 JAR 选择页面，默认全部索引"]
+    )
+    var skipSelect: Boolean = false
+
     override fun run() {
         // 从当前目录向上递归查找 pom.xml
         val projectRoot = findProjectRoot() ?: run {
@@ -71,9 +77,27 @@ class InitCommand : Runnable {
             }
         }
 
+        // 交互式选择要索引的 JAR
+        val excludedJars = if (!skipSelect && jars.size > 1) {
+            println("[INFO] 正在启动 JAR 选择页面...")
+            try {
+                JarSelectorServer.startAndWait(jars, projectRoot, GraphConfig())
+            } catch (e: Exception) {
+                println("[WARN] 启动选择页面失败 (${e.message})，默认全部索引")
+                emptyList()
+            }
+        } else {
+            emptyList()
+        }
+
+        if (excludedJars.isNotEmpty()) {
+            println("[INFO] 已跳过 ${excludedJars.size} 个 JAR")
+        }
+
         val config = GraphConfig(
             projectPath = projectRoot.canonicalPath,
-            classpath = jars.joinToString(",")
+            classpath = jars.joinToString(","),
+            excludedJars = excludedJars
         )
 
         GraphConfig.save(config, projectRoot)
