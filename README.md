@@ -10,7 +10,7 @@ jargraph index  # 分析字节码，写入 .codegraph/codegraph.db
 ## 安装
 
 ```bash
-npm install -g @jargraph/cli
+npm install -g https://github.com/starrylistener/jar-graph/releases/download/0.1.0/jargraph-cli-0.1.0.tgz
 ```
 
 要求：
