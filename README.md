@@ -1,6 +1,6 @@
 # jargraph
 
-JAR 字节码分析器，生成 [codegraph](https://github.com/uniphil/codegraph) 兼容的 SQLite 知识图谱，让 AI 助手（MCP）也能导航项目依赖。
+JAR 字节码分析器，生成 [codegraph](https://github.com/colbymchenry/codegraph) 兼容的 SQLite 知识图谱，让 AI 助手（MCP）也能导航项目依赖。
 
 ```bash
 jargraph init   # 解析 Maven 依赖，交互式选择要索引的 JAR
