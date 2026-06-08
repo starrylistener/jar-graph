@@ -72,22 +72,39 @@ class IndexCommand : Runnable {
             emptySet()
         }
 
-        // 2. 收集所有 JAR 的分析结果
-        println("[INFO] 开始分析 ${jarsToIndex.size} 个 JAR 包...")
+        // 2. 预扫描：统计所有 class 文件总数
+        val progress = ProgressBar()
+        progress.start("Scanning JARs")
+        var totalClasses = 0
+        for ((idx, jarPath) in jarsToIndex.withIndex()) {
+            val file = File(jarPath)
+            if (file.exists()) {
+                totalClasses += indexer.countClasses(jarPath)
+            }
+            progress.update(idx + 1, jarsToIndex.size)
+        }
+        progress.finish("Scanning JARs", "${ProgressBar.formatNumber(totalClasses)} classes")
+
+        // 3. 解析所有 JAR
+        progress.start("Parsing classes")
         val allResults = mutableListOf<IndexResult>()
+        var parsedClasses = 0
 
         for (jarPath in jarsToIndex) {
             val file = File(jarPath)
             if (!file.exists()) {
-                println("[WARN] JAR 不存在，跳过: $jarPath")
                 continue
             }
 
-            println("[INFO] 分析: ${file.name}")
+            indexer.onProgress = { current, _ ->
+                parsedClasses++
+                progress.update(parsedClasses, totalClasses)
+            }
             val result = indexer.indexJar(jarPath, excludeNames)
             allResults.add(result)
-            println("[INFO]   初步 nodes=${result.nodes.size}, edges=${result.edges.size}")
         }
+        indexer.onProgress = null
+        progress.finish("Parsing classes", "${ProgressBar.formatNumber(parsedClasses)} classes")
 
         // 3. 全局合并：去重 nodes，过滤 dangling edges
         val nodeMap = mutableMapOf<String, GraphNode>()
@@ -117,12 +134,13 @@ class IndexCommand : Runnable {
 
         println("[INFO] 全局合并后 nodes=${allNodes.size}, 有效 edges=${distinctEdges.size}, 过滤 dangling=$filteredEdges, 去重=$dedupedCount")
 
-        // 4. 一次性写入（不写 files 表，避免 codegraph sync 误删 JAR 数据）
+        // 4. 写入数据库
+        progress.start("Writing database")
         val mergedResult = IndexResult(nodes = allNodes, edges = distinctEdges, files = emptyList())
         writer.write(mergedResult)
-
         val stats = writer.getStats()
         writer.close()
+        progress.finish("Writing database", "${ProgressBar.formatNumber(stats.nodeCount.toInt())} nodes, ${ProgressBar.formatNumber(stats.edgeCount.toInt())} edges")
 
         println()
         println("=" * 40)

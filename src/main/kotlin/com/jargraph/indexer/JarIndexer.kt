@@ -12,12 +12,40 @@ import java.util.jar.JarFile
  */
 class JarIndexer {
 
+    /** 进度回调：已解析数量, 总数量 */
+    var onProgress: ((current: Int, total: Int) -> Unit)? = null
+
     fun indexJar(jarPath: String, excludeNames: Set<String> = emptySet()): IndexResult {
         val jarFile = File(jarPath)
         if (!jarFile.exists()) {
             throw IllegalArgumentException("JAR file not found: $jarPath")
         }
         return processJarFile(jarFile, jarFile.name, excludeNames)
+    }
+
+    /** 预扫描：统计 JAR 中 class 文件总数（含嵌套 JAR） */
+    fun countClasses(jarPath: String): Int {
+        val jarFile = File(jarPath)
+        if (!jarFile.exists()) return 0
+        return countJarClasses(JarFile(jarFile))
+    }
+
+    private fun countJarClasses(jar: JarFile): Int {
+        val entries = jar.entries().toList()
+        var count = entries.count { it.name.endsWith(".class") }
+        val nestedJars = entries.filter { !it.isDirectory && it.name.endsWith(".jar") }
+        for (nestedEntry in nestedJars) {
+            val tempFile = File.createTempFile("nested-", ".jar")
+            tempFile.deleteOnExit()
+            jar.getInputStream(nestedEntry).use { input ->
+                tempFile.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+            count += countJarClasses(JarFile(tempFile))
+            tempFile.delete()
+        }
+        return count
     }
 
     private fun processJarFile(jarFile: File, namePrefix: String, excludeNames: Set<String>): IndexResult {
@@ -63,7 +91,7 @@ class JarIndexer {
 
         // 1. 处理 class 文件
         val classEntries = entries.filter { it.name.endsWith(".class") }
-        for (entry in classEntries) {
+        for ((idx, entry) in classEntries.withIndex()) {
             jar.getInputStream(entry).use { stream ->
                 val classReader = ClassReader(stream.readAllBytes())
                 val visitor = CodeGraphClassVisitor(
@@ -76,6 +104,7 @@ class JarIndexer {
                 )
                 classReader.accept(visitor, ClassReader.SKIP_DEBUG or ClassReader.SKIP_FRAMES)
             }
+            onProgress?.invoke(idx + 1, classEntries.size)
         }
 
         // 2. 处理嵌套 JAR

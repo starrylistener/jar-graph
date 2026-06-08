@@ -93,6 +93,8 @@ class InitCommand : Runnable {
     }
 
     private fun findMvn(): String? {
+        val isWin = System.getProperty("os.name").lowercase().contains("win")
+
         // 1. launcher.js 注入的环境变量（优先）
         System.getenv("JARGRAPH_MVN")?.let { path ->
             if (File(path).exists()) return path
@@ -101,24 +103,43 @@ class InitCommand : Runnable {
         // 2. 从当前目录向上递归查找 mvnw（Maven Wrapper）
         var dir = File(".").canonicalFile
         while (dir.parentFile != null) {
-            val mvnw = File(dir, "mvnw")
-            if (mvnw.exists()) {
-                return mvnw.canonicalPath
+            val mvnwNames = if (isWin) listOf("mvnw.cmd", "mvnw.bat", "mvnw") else listOf("mvnw")
+            for (name in mvnwNames) {
+                val mvnw = File(dir, name)
+                if (mvnw.exists()) {
+                    return mvnw.canonicalPath
+                }
             }
             dir = dir.parentFile
         }
 
         // 3. 从 PATH 中查找 mvn / mvnw
-        listOf("mvn", "mvnw").firstOrNull { isCommandInPath(it) }?.let { return it }
+        val mvnNames = if (isWin) listOf("mvn.cmd", "mvn.exe", "mvn") else listOf("mvn")
+        for (name in mvnNames) {
+            if (isCommandInPath(name)) return name
+        }
+        val mvnwNamesPath = if (isWin) listOf("mvnw.cmd", "mvnw.bat", "mvnw") else listOf("mvnw")
+        for (name in mvnwNamesPath) {
+            if (isCommandInPath(name)) return name
+        }
 
         // 4. 探测常见安装路径
-        val commonPaths = listOfNotNull(
-            System.getenv("M2_HOME")?.let { "$it/bin/mvn" },
-            System.getenv("MAVEN_HOME")?.let { "$it/bin/mvn" },
-            "/opt/homebrew/bin/mvn",
-            "/usr/local/bin/mvn",
-            "/usr/bin/mvn"
-        )
+        val commonPaths = if (isWin) {
+            listOfNotNull(
+                System.getenv("M2_HOME")?.let { "$it\\bin\\mvn.cmd" },
+                System.getenv("MAVEN_HOME")?.let { "$it\\bin\\mvn.cmd" },
+                "C:\\Program Files\\Apache Software Foundation\\Maven\\bin\\mvn.cmd",
+                "C:\\Program Files\\Maven\\bin\\mvn.cmd"
+            )
+        } else {
+            listOfNotNull(
+                System.getenv("M2_HOME")?.let { "$it/bin/mvn" },
+                System.getenv("MAVEN_HOME")?.let { "$it/bin/mvn" },
+                "/opt/homebrew/bin/mvn",
+                "/usr/local/bin/mvn",
+                "/usr/bin/mvn"
+            )
+        }
 
         return commonPaths.firstOrNull { File(it).exists() }
     }
