@@ -17,19 +17,19 @@ class InitCommand : Runnable {
     var force: Boolean = false
 
     override fun run() {
-        val pomFile = File("pom.xml")
-        if (!pomFile.exists()) {
-            println("[ERROR] 当前目录未找到 pom.xml，请在 Maven 项目根目录执行")
+        // 从当前目录向上递归查找 pom.xml
+        val projectRoot = findProjectRoot() ?: run {
+            println("[ERROR] 当前目录及上级目录均未找到 pom.xml")
             return
         }
 
-        val configFile = File(GraphConfig.CONFIG_PATH)
+        val configFile = File(projectRoot, GraphConfig.CONFIG_PATH)
         if (configFile.exists() && !force) {
             println("[INFO] 配置已存在，使用 -f 强制重新初始化")
             return
         }
 
-        println("[INFO] 解析项目: ${pomFile.canonicalPath}")
+        println("[INFO] 解析项目: ${projectRoot.canonicalPath}")
 
         val mvnCmd = findMvn() ?: run {
             println("[ERROR] 未找到 mvn 或 mvnw 命令，请确保 Maven 已安装")
@@ -46,7 +46,7 @@ class InitCommand : Runnable {
             mvnCmd, "-q", "dependency:build-classpath",
             "-Dmdep.outputFile=${tempFile.absolutePath}"
         )
-            .directory(File("."))
+            .directory(projectRoot)
             .redirectError(ProcessBuilder.Redirect.INHERIT)
             .start()
 
@@ -72,19 +72,35 @@ class InitCommand : Runnable {
         }
 
         val config = GraphConfig(
-            projectPath = File(".").canonicalPath,
+            projectPath = projectRoot.canonicalPath,
             classpath = jars.joinToString(",")
         )
 
-        GraphConfig.save(config)
-        println("[INFO] 配置已保存到: ${GraphConfig.CONFIG_PATH}")
+        GraphConfig.save(config, projectRoot)
+        println("[INFO] 配置已保存到: ${projectRoot.canonicalPath}/${GraphConfig.CONFIG_PATH}")
+    }
+
+    private fun findProjectRoot(): File? {
+        var dir = File(".").canonicalFile
+        while (true) {
+            if (File(dir, "pom.xml").exists()) {
+                return dir
+            }
+            val parent = dir.parentFile ?: break
+            dir = parent
+        }
+        return null
     }
 
     private fun findMvn(): String? {
-        // 1. 优先检查当前目录的 mvnw（Maven Wrapper）
-        val localMvnw = File("mvnw")
-        if (localMvnw.exists() && localMvnw.canExecute()) {
-            return localMvnw.canonicalPath
+        // 1. 从当前目录向上递归查找 mvnw（Maven Wrapper）
+        var dir = File(".").canonicalFile
+        while (dir.parentFile != null) {
+            val mvnw = File(dir, "mvnw")
+            if (mvnw.exists()) {
+                return mvnw.canonicalPath
+            }
+            dir = dir.parentFile
         }
 
         // 2. 检查环境变量指定的 mvn 路径

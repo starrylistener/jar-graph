@@ -25,8 +25,8 @@ class GraphConfig(
         }
 
         @JvmStatic
-        fun save(config: GraphConfig) {
-            val file = File(CONFIG_PATH)
+        fun save(config: GraphConfig, rootDir: File = File(".")) {
+            val file = File(rootDir, CONFIG_PATH)
             file.parentFile?.mkdirs()
             val props = Properties().apply {
                 setProperty("project.path", config.projectPath)
